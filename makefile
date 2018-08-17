@@ -3,7 +3,7 @@ CFLAGS = -Wall -pedantic -g -ggdb#-Werror
 LFLAGS = -g -lm
 DIRECTORY = bin
 #OBJS   = config.o init.o sdlInterface.o graphics.o menu.o gui.o player.o gameObject.o luaLink.o core.o main.o
-OBJS   = lodepng.o main.o
+OBJS   = lodepng.o image.o main.o
 PROG = cmbimg
 CXX = gcc
 
@@ -11,7 +11,7 @@ CXX = gcc
 all: $(PROG)
 
 # compiling other source files.
-%.o: src/%.cpp src/%.hpp
+%.o: src/%.c src/%.h
 	$(CXX) $(CFLAGS) -c -g -ggdb -s $<
 
 # linking the program.

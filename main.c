@@ -3,88 +3,16 @@
 #include <stdio.h>
 #include <errno.h>
 
-#include "lodepng.h"
-#define BUFF_SIZE 10
+#include "manipulation.h"
+#include "image.h"
+#include "util.h"
+#define BUF_SIZE 20
 
 #define MERGE_HORIZ 1
 #define MERGE_VERT  2
 #define MERGE_FORCE 4
 
 #define MAX_PICS  4
-
-struct image {
-  unsigned char* dat;
-  unsigned int w;
-  unsigned int h;
-};
-
-struct image* create_image() {
-  struct image* ret = (struct image*)malloc(sizeof(struct image));
-  ret->dat = NULL;
-  ret->w = 0;ret->h = 0;
-  return ret;
-}
-
-void reset_dat(struct image* im) {
-  if (im->dat != NULL) {
-    free(im->dat);
-  }
-  im->dat = malloc(4*im->w*im->h);
-}
-
-void delete_image(struct image* im) {
-  if (im->dat != NULL) {
-    free(im->dat);
-  }
-  free(im);
-}
-
-struct color {
-  unsigned char r;
-  unsigned char g;
-  unsigned char b;
-  unsigned char a;
-};
-
-void decode(const char* filename, struct image* im)
-{
-  unsigned error;
-  LodePNGState* st = malloc(sizeof(LodePNGState));
-
-  lodepng_inspect(&(im->w), &(im->h), st, (const unsigned char*)filename, 1);
-  reset_dat(im);
-
-  error = lodepng_decode32_file(&(im->dat), &(im->w), &(im->h), filename);
-  if(error) printf("error %u: %s\n", error, lodepng_error_text(error));
-
-  free(st);
-}
-
-void encode(const char* filename, const unsigned char* image,
-    unsigned int width, unsigned int height)
-{
-  /*Encode the image*/
-  unsigned error = lodepng_encode32_file(filename, image, width, height);
-
-  /*if there's an error, display it*/
-  if(error) printf("error %u: %s\n", error, lodepng_error_text(error));
-}
-
-void read_from_raw(struct image* im,
-    unsigned int x, unsigned int y, struct color* col) {
-	col->r = im->dat[x*4 + y*(im->w)*4];
-	col->g = im->dat[x*4+1 + y*(im->w)*4];
-	col->b = im->dat[x*4+2 + y*(im->w)*4];
-	col->a = im->dat[x*4+3 + y*(im->w)*4];
-}
-
-void write_to_raw(struct image* im,
-    unsigned int x, unsigned int y, struct color col) {
-	im->dat[x*4 + y*(im->w)*4] = col.r;
-	im->dat[x*4+1 + y*(im->w)*4] = col.g;
-	im->dat[x*4+2 + y*(im->w)*4] = col.b;
-	im->dat[x*4+3 + y*(im->w)*4] = col.a;
-}
 
 struct image* merge_horiz(struct image* im1, struct image* im2) {
   struct image* ret = create_image();
@@ -204,41 +132,55 @@ void move_args(int i, int ntimes, int argc, char** argv) {
   }
 }
 
-int main(int argc, char** argv){
+void read_args(int argc, char** argv, struct flags* args) {
   if (argc < 3) {
     printf("error: proper usage is:\n	pngCombine fname1.png fname2.png\n");
     exit(0);
   }
-  //1 = merge horizontally, 2 = merge vertically
-  char merge_mode = MERGE_HORIZ | MERGE_VERT;
-  int columns = 2;
-  int num_pics = -1;
+
+  //set defaults
+  args->merge_mode = MERGE_HORIZ | MERGE_VERT;
+  args->columns = 2;
+  args->num_pics = -1; 
+  args->outputName = "cmbimg_out.png";
+  args->pre_proc_args = create_list(BUF_SIZE);
+
   int n = argc - 1;
   int flagnum = 0;
-  int i = 1;
-  char* outputName = "cmbimg_out.png";
-  for (; i<n; i++) {
+
+  struct str_list* curr = args->pre_proc_args;
+  for (int i = 1; i<n; i++) {
     flagnum = 0;
     if (argv[i][0] == '-') {
       //read special hyphenated option
       if (argv[i][1] == 'v') {
 	flagnum += 1;
-	merge_mode = (merge_mode | MERGE_VERT);
-	columns = 1;
+	args->merge_mode = (args->merge_mode | MERGE_VERT);
+	args->columns = 1;
       } else if (argv[i][1] == 'h') {
 	flagnum += 1;
-	merge_mode = (merge_mode | MERGE_HORIZ);
+	args->merge_mode = (args->merge_mode | MERGE_HORIZ);
       } else if (argv[i][1] == 'f') {
 	flagnum += 1;
-	merge_mode = (merge_mode | MERGE_FORCE);
+	args->merge_mode = (args->merge_mode | MERGE_FORCE);
+      } else if (argv[i][1] == 's') {
+	flagnum += 2;
+	curr->n = i-1;
+	if ( i >= argc-1) {
+	  printf("Error: if you pass -s the following argument must be a width and height scale factor\n");
+	  printf("i.e. : cmbimg -s w=1.0,h=2.0 foo.png bar.png out.png -c 2\n");
+	  exit(1);
+	}
+	sprintf(curr->dat, "s%s", argv[i+1]);
+	curr = append_empty(curr, BUF_SIZE);
       } else if (argv[i][1] == 'c') {
 	flagnum += 2;
 	if (i == argc-1) {
 	  printf("ERROR: if you pass -c you must pass an integer after\n");
-	  printf("i.e. : comb_png foo.png bar.png out.png -c 2");
+	  printf("i.e. : cmbimg foo.png bar.png out.png -c 2\n");
 	  exit(1);
 	}
-	columns = strtol(argv[i+1], NULL, 10);
+	args->columns = strtol(argv[i+1], NULL, 10);
 	int errsav = errno;
 	if (errsav == EINVAL) {
 	  printf("invalid column number supplied '%s'\n", argv[i+1]);
@@ -254,7 +196,7 @@ int main(int argc, char** argv){
 	  printf("i.e. : cmbimg -n 2 foo.png bar.png -o out.png");
 	  exit(1);
 	}
-	num_pics = strtol(argv[i+1], NULL, 10);
+	args->num_pics = strtol(argv[i+1], NULL, 10);
 	int errsav = errno;
 	if (errsav == EINVAL) {
 	  printf("invalid column number supplied '%s'\n", argv[i+1]);
@@ -270,7 +212,7 @@ int main(int argc, char** argv){
 	  printf("i.e. : cmbimg foo.png bar.png out.png -c 2");
 	  exit(1);
 	}
-	outputName = argv[i+1];
+	args->outputName = argv[i+1];
       } else {
 	printf("unrecognized option '%s'", argv[i]+1);
 	exit(0);
@@ -284,57 +226,90 @@ int main(int argc, char** argv){
       i -= 1;
     }
   }
-  printf("found %d images\n", n);
-  if (num_pics < 0) {
-    num_pics = n;
-  } else if (num_pics < n) {
-    printf("Too many pictures supplied, using the first %d.\n", num_pics);
-    outputName = argv[n];
+  if (args->num_pics < 0) {
+    args->num_pics = n;
+  } else if (args->num_pics < n) {
+    printf("Too many pictures supplied, using the first %d.\n", args->num_pics);
+    args->outputName = argv[n];
   }
 
   #ifdef DEBUG
+  printf("found %d images\n", n);
   for (i = 0; i < argc; i++) {
     printf("arg %d: %s\n", i, argv[i]);
   }
-  printf("cols: %d, n: %d, mode: %d\n", columns, num_pics, merge_mode);
-  #endif
-  /*const char* file1 = argv[1];
-  const char* file2 = argv[2];*/
-  
-  /*if (argc >= 4) {
-    outputName = malloc(strlen(argv[3]));
-    strcpy(outputName, argv[3]);
-  } else {
-    outputName = "comb_png_output.png"
-    outputName = malloc(strlen(file1)+strlen(file2)+6);
-    strncpy(outputName, file1, strlen(file1)-4);
-    outputName[strlen(file1)-3]=0;
-    strcat(outputName, "_and_");
-    strcat(outputName, file2);
-  }*/
+  printf("cols: %d, n: %d, mode: %d\n", args->columns, args->num_pics, args->merge_mode);
+  #endif 
+}
 
-  if (num_pics > MAX_PICS && !(merge_mode & MERGE_FORCE)) {
+void pre_process(struct image** inputs, struct str_list* pre_proc_args) {
+  struct str_list* curr = pre_proc_args;
+  char* tmp = NULL;
+  int i = 0;
+  while (curr != NULL) {
+    i = curr->n;
+    if (curr->dat[0] == 's') {
+      double x = 1.0;
+      double y = 1.0;
+      tmp = parse_string_args(curr->dat, "x");
+      if (tmp != NULL) {
+	x = atof(tmp);
+      } else {
+	tmp = parse_string_args(curr->dat, "w");
+	if (tmp != NULL) {
+	  x = atof(tmp)/inputs[i]->w;
+	} else {
+	  printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+	}
+      }
+      tmp = parse_string_args(curr->dat, "y");
+      if (tmp != NULL) {
+	y = atof(tmp);
+      } else {
+      	tmp = parse_string_args(curr->dat, "h");
+	if (tmp != NULL) {
+	  x = atof(tmp)/inputs[i]->w;
+	} else {
+	  printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+	}
+      }
+      printf("now scaling image %d, by a factor of (%f,%f)\n", i, x, y);
+      struct image* tmp_img = scale(inputs[i], x, y);
+      delete_image(inputs[i]);
+      inputs[i] = tmp_img;
+    }
+    curr = curr->next;
+  }
+}
+
+int main(int argc, char** argv){
+  struct flags args;
+  read_args(argc, argv, &args);
+
+  /*
+   * =============================== LOAD AND PROCESS IMAGES ===============================
+   */
+  if (args.num_pics > MAX_PICS && !(args.merge_mode & MERGE_FORCE)) {
     printf("ERROR: exceeded max number of pictures.\n(You can supress this message by using the -f flag)\n");
     exit(1);
   }
-  struct image **inputs = malloc(sizeof(struct image*)*num_pics);
-  for (i = 0; i < num_pics; i++) {
+  struct image **inputs = malloc(sizeof(struct image*)*args.num_pics);
+  for (int i = 0; i < args.num_pics; i++) {
     inputs[i] = create_image();
     decode(argv[i+1], inputs[i]);
     printf("decoded file %s, w:%d, h:%d\n", argv[i+1], inputs[i]->w, inputs[i]->h);
   }
+  pre_process(inputs, args.pre_proc_args);
 
   //create the output image
-  struct image* out = merge(columns, num_pics, merge_mode, inputs, 0);
+  struct image* out = merge(args.columns, args.num_pics, args.merge_mode, inputs, 0);
   
-  //printf("finished creating output, w:%d, h%d\n", out->w, out->h);
-  encode(outputName, out->dat, out->w, out->h);
+  encode(args.outputName, out->dat, out->w, out->h);
 
-//  free(outputName);
-  for (i = 0; i < num_pics; i++) {
+  for (int i = 0; i < args.num_pics; i++) {
     delete_image(inputs[i]);
   }
-  delete_image(out);
+  //delete_image(out);
 
   return 0;
 }
