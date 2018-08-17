@@ -160,10 +160,10 @@ void read_args(int argc, char** argv, struct flags* args) {
       } else if (argv[i][1] == 'h') {
 	flagnum += 1;
 	args->merge_mode = (args->merge_mode | MERGE_HORIZ);
-      } else if (argv[i][1] == 'f') {
+      } else if (argv[i][1] == 'f' || strcmp(argv[i], "--force") == 0) {
 	flagnum += 1;
 	args->merge_mode = (args->merge_mode | MERGE_FORCE);
-      } else if (argv[i][1] == 's') {
+      } else if (argv[i][1] == 's' || strcmp(argv[i], "--scale") == 0) {
 	flagnum += 2;
 	curr->n = i-1;
 	if ( i >= argc-1) {
@@ -173,6 +173,16 @@ void read_args(int argc, char** argv, struct flags* args) {
 	}
 	sprintf(curr->dat, "s%s", argv[i+1]);
 	curr = append_empty(curr, BUF_SIZE);
+      } else if (argv[i][1] == 'r' || strcmp(argv[i], "--crop") == 0) {
+	flagnum += 2;
+	curr->n = i-1;
+	if ( i >= argc-1) {
+	  printf("Error: if you pass -r the following argument must be an (x,y) coordinate and a width and height\n");
+	  printf("i.e. : cmbimg -r x=0,y=0,w=320,h=320 foo.png bar.png out.png -c 2\n");
+	  exit(1);
+	}
+	sprintf(curr->dat, "r%s", argv[i+1]);
+	curr = append_empty(curr, BUF_SIZE);
       } else if (argv[i][1] == 'c') {
 	flagnum += 2;
 	if (i == argc-1) {
@@ -181,6 +191,23 @@ void read_args(int argc, char** argv, struct flags* args) {
 	  exit(1);
 	}
 	args->columns = strtol(argv[i+1], NULL, 10);
+	int errsav = errno;
+	if (errsav == EINVAL) {
+	  printf("invalid column number supplied '%s'\n", argv[i+1]);
+	  exit(1);
+	} else if (errsav == ERANGE) {
+	  printf("column number out of range '%s'\n", argv[i+1]);
+	  exit(1);
+	}
+      } else if (strstr(argv[i], "--columns") != NULL) {
+	flagnum += 1;
+	char* tmp = parse_string_args(argv[i], "columns");
+	if (tmp == NULL) {
+	  printf("ERROR: if you pass --columns you must pass an integer\n");
+	  printf("i.e. : cmbimg foo.png bar.png out.png --columns=2\n");
+	  exit(1);
+	}
+	args->columns = strtol(tmp, NULL, 10);
 	int errsav = errno;
 	if (errsav == EINVAL) {
 	  printf("invalid column number supplied '%s'\n", argv[i+1]);
@@ -275,6 +302,39 @@ void pre_process(struct image** inputs, struct str_list* pre_proc_args) {
       }
       printf("now scaling image %d, by a factor of (%f,%f)\n", i, x, y);
       struct image* tmp_img = scale(inputs[i], x, y);
+      delete_image(inputs[i]);
+      inputs[i] = tmp_img;
+    } else if (curr->dat[0] == 'r') {
+      int x = 0;
+      int y = 0;
+      int w = 0;
+      int h = 0;
+      tmp = parse_string_args(curr->dat, "x");
+      if (tmp != NULL) {
+	x = atol(tmp);
+      } else {
+	printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+      }
+      tmp = parse_string_args(curr->dat, "y");
+      if (tmp != NULL) {
+	y = atol(tmp);
+      } else {
+	printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+      }
+      tmp = parse_string_args(curr->dat, "w");
+      if (tmp != NULL) {
+	w = atol(tmp);
+      } else {
+	printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+      }
+      tmp = parse_string_args(curr->dat, "h");
+      if (tmp != NULL) {
+	h = atol(tmp);
+      } else {
+	printf("ERROR: '%s' does not seem to be a valid scaling argument string\n", curr->dat+sizeof(char*));
+      }
+      printf("now cropping image %d, to the the rectangle starting at (%d,%d), width=%d, height=%d\n", i, x, y, w, h);
+      struct image* tmp_img = crop(inputs[i], x, y, w, h);
       delete_image(inputs[i]);
       inputs[i] = tmp_img;
     }

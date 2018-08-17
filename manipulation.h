@@ -74,4 +74,25 @@ struct image* scale(struct image* im, double sc_w, double sc_h) {
   return ret;
 }
 
+struct image* crop(struct image* im, int x, int y, int w, int h) {
+  if (x < 0 || y < 0 || w <0 || h <0) {
+    printf("ERROR: invalid argument passed to crop, (x,y)=(%d,%d), (w,h)=(%d,%d)\n", x, y, w, h);
+    exit(1);
+  }
+  if (x+w > im->w || y+h > im->h) {
+    printf("WARNING: the selected rectangle goes out of image bounds\n");
+  }
+  struct image* tmp = create_empty_image(w, h, im->mode);
+
+  struct color c;
+  for (int xp = x; xp < im->w && xp < x+w; xp++) {
+    for (int yp= y; yp < im->h && yp < y+h; yp++) {
+      read_from_raw(im, xp, yp, &c);
+      write_to_raw(tmp, xp-x, yp-y, c);
+    }
+  }
+
+  return tmp;
+}
+
 #endif //MANIPULATION_H
