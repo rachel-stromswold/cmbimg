@@ -1,4 +1,4 @@
-CFLAGS = -Wall -pedantic -g -ggdb#-Werror
+CFLAGS = -Wall -pedantic -g -ggdb -DDEBUG_READ -DDEBUG_WRITE# -Werror
 #LFLAGS = `sdl-config --libs` -lSDL2 -lSDL2_ttf -lSDL2_image -lm
 LFLAGS = -g -lm
 DIRECTORY = bin

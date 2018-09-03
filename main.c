@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <errno.h>
 
+//#include "imgload.h"
 #include "manipulation.h"
 #include "image.h"
 #include "util.h"
@@ -369,7 +370,16 @@ int main(int argc, char** argv){
   for (int i = 0; i < args.num_pics; i++) {
     delete_image(inputs[i]);
   }
-  //delete_image(out);
+ 
+//  delete_image(out);
+  /*
+   * debugging
+   */
+/*  struct image* input = create_image();
+  decode("giftest.gif", input);
+  printf("decoded file giftest.gif, w:%d, h%d\n", input->w, input->h);
+  encode("pngtest.png", input->dat, input->w, input->h);
+  delete_image(input);*/
 
   return 0;
 }

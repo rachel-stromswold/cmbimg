@@ -1,8 +1,9 @@
 #ifndef MANIPULATION_H
 #define MANIPULATION_H
-#include "image.h"
 
 #include <math.h>
+
+#include "image.h"
 
 //This is a helper function that scales down by a factor of sc_w and sc_h. If im is a 640x480 image and sc_w=sc_h=2.0 then the output will be a scaled down 320x240 image. If either sc_w<1.0 or sc_h<1.0 an error will be given.
 struct image* scale_down(struct image* im, double sc_w, double sc_h) {
