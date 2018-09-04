@@ -88,6 +88,7 @@ struct dictionary {
   //the first entries are implicit
   size_t imp_ents;
   size_t size;
+  size_t* dat_sizes;
   unsigned char** dat;//an int is at least 16>12 bits so we may safely store any code
 };
 
@@ -96,6 +97,7 @@ struct dictionary* create_dictionary(struct palatte* pal) {
   struct dictionary* ret = (struct dictionary*)malloc(sizeof(struct dictionary));
   ret->size = 0x01 << (pal->n + 1);
   ret->dat = (unsigned char**)calloc(ret->size, sizeof(char*));
+  ret->dat_sizes = (size_t*)calloc(ret->size, sizeof(size_t));
   ret->imp_ents = (0x01 << pal->n) + 2;//plus 2 for the clear and end codes
 /*  for (int i = 0; i < (0x01 << pal->n); i++) {
     ret->dat[i] = i;//1 byte for length and 1 for data
@@ -113,6 +115,7 @@ void delete_dictionary(struct dictionary* dict) {
 	free(dict->dat[i]);
       }
       free(dict->dat);
+      free(dict->dat_sizes);
     }
     free(dict);
   }
@@ -120,12 +123,16 @@ void delete_dictionary(struct dictionary* dict) {
 
 void dict_grow(struct dictionary* dict) {
   unsigned char** old_dat = dict->dat;
+  size_t* old_dat_sizes = dict->dat_sizes;
   dict->dat = (unsigned char**)calloc((dict->size*2), sizeof(char*));
+  dict->dat_sizes = (size_t*)calloc((dict->size*2), sizeof(size_t));
   for (int i = 0; i < dict->size; i++) {
     dict->dat[i] = old_dat[i];
+    dict->dat_sizes[i] = old_dat_sizes[i];
   }
   dict->size *= 2;
   free(old_dat);
+  free(old_dat_sizes);
 }
 
 //n = number of bytes to copy, be sure this is right or you will get a segfault
@@ -135,7 +142,8 @@ int add_dict_code(struct dictionary* dict, size_t index, unsigned char* code, si
   int ret = DICT_MSG_NULL;
   if (dict != NULL) {
     size_t l0 = dict->entries - dict->imp_ents;
-    if (l0 >= dict->size) {
+//    size_t l0 = index - dict->imp_ents;
+    if (l0 >= dict->size || dict->next_write > dict->size) {
       if (dict->entries > (0x01 << GIF_MAX_CODE_LEN)) {
 	return DICT_MSG_RES;
       }
@@ -147,8 +155,10 @@ int add_dict_code(struct dictionary* dict, size_t index, unsigned char* code, si
     //if we specify an index add the next entry there, otherwise add it at the next slot
     if (index < dict->imp_ents) {
       l0 = dict->next_write;
-      dict->dat[dict->next_write] = (unsigned char*)malloc(n+1);
-      dict->dat[dict->next_write][0] = n;
+//      dict->dat[dict->next_write] = (unsigned char*)malloc(n+1);
+      dict->dat[dict->next_write] = (unsigned char*)malloc(n);
+      dict->dat_sizes[dict->next_write] = n;
+//      dict->dat[dict->next_write][0] = n;
     } else {
       l0 = index - dict->imp_ents;
       if (index > dict->size) {
@@ -158,7 +168,8 @@ int add_dict_code(struct dictionary* dict, size_t index, unsigned char* code, si
 	//exit(0);
       }
       dict->dat[index - dict->imp_ents] = (unsigned char*)malloc(n+1);
-      dict->dat[index - dict->imp_ents][0] = n; 
+//      dict->dat[index - dict->imp_ents][0] = n; 
+      dict->dat_sizes[index - dict->imp_ents] = n;
     }
     //move the next write slot to the next available spot
     while (dict->dat[dict->next_write] != NULL) {
@@ -169,7 +180,7 @@ int add_dict_code(struct dictionary* dict, size_t index, unsigned char* code, si
     printf("Next write: %lu\nAdded dictionary code %lu: ", dict->next_write, dict->entries);
 #endif
     for (int i = 0; i < n; i++) {
-      dict->dat[l0][i+1] = code[i];
+      dict->dat[l0][i] = code[i];
 #ifdef DEBUG_WRITE
       printf("%d ", code[i]);
 #endif
@@ -195,7 +206,7 @@ long int get_dict_code(struct dictionary* dict, unsigned char* pat, size_t n) {
 	char found = 1;
 	for (int j = 0; j < n; j++) {
 	  //if there is one bit different, then we have not found it
-	  if (pat[j] != dict->dat[i][j+1]) {
+	  if (pat[j] != dict->dat[i][j]) {
 	    found = 0;
 	    break;
 	  }
@@ -221,7 +232,8 @@ int get_code_len(struct dictionary* dict, long int code) {
   if (dict->dat[code - dict->imp_ents] == NULL) {
     return -1;
   }
-  return (int)(dict->dat[code - dict->imp_ents][0]);
+//  return (int)(dict->dat[code - dict->imp_ents][0]);
+  return (int)(dict->dat_sizes[code - dict->imp_ents]);
 }
 
 //returns the jth element in the pattern for the corresponding code
@@ -233,7 +245,7 @@ size_t get_pattern(struct dictionary* dict, size_t code, int j) {
     printf("Warning, tried to access null table entry\n");
     return 0;
   }
-  return dict->dat[code - dict->imp_ents][j + 1];
+  return dict->dat[code - dict->imp_ents][j];
 }
 
 void print_dict_debug(struct dictionary* dict, size_t code) {
@@ -245,6 +257,35 @@ void print_dict_debug(struct dictionary* dict, size_t code) {
   }
   printf("\n");
 #endif
+}
+
+struct gif_img {
+  struct dictionary* dict;
+  struct palatte* pal;
+  unsigned char* dat;
+  size_t bpc;
+  int x_off;
+  int y_off;
+  int w;
+  int h;
+  int w_log;//logical screen width and height
+  int h_log;
+};
+
+void img_paint(struct gif_img* im, int x, int y,
+	       unsigned char r, unsigned char g, unsigned char b) {
+  size_t ind = (im->w_log)*(im->y_off)+(im->w)*y + x+(im->x_off);
+  im->dat[(im->bpc)*ind] = r;
+  im->dat[(im->bpc)*ind + 1] = g;
+  im->dat[(im->bpc)*ind + 2] = b;
+  if (im->bpc > 3)
+    im->dat[(im->bpc)*ind + 3] = 255;
+}
+
+void img_set_alpha(struct gif_img* im, int x, int y, unsigned char a) {
+  size_t ind = (im->w_log)*(im->y_off)+(im->w)*y + x+(im->x_off);
+  if (im->bpc > 3)
+    im->dat[(im->bpc)*ind + 3] = a;
 }
 
 int get_dist(unsigned char r, unsigned char g, unsigned char b, unsigned char ro, unsigned char go, unsigned char bo) {
@@ -504,8 +545,8 @@ void imgload_encode_gif(const char* fname, size_t w, size_t h, unsigned char* da
 
 //this is a helper function that writes {CODE} to the image and appends the palatte color K if ap is not equal to 0
 //RETURNS: the new value of the index offset
-int out_to_img(unsigned char* img, int bpc, int i, int n,
-	       struct palatte* pal, struct dictionary* dict, size_t code, unsigned char K/*, char ap*/) {
+/*int out_to_img(unsigned char* img, int bpc, int i, int n,
+	       struct palatte* pal, struct dictionary* dict, size_t code, unsigned char K) {
   int j = 0;
   for (; j < n; j++) {
     unsigned char seq = get_pattern(dict, code, j);
@@ -513,17 +554,36 @@ int out_to_img(unsigned char* img, int bpc, int i, int n,
     img[bpc*(i+j)+1] = pal->dat[BYTES_PER_COL*seq+1];
     img[bpc*(i+j)+2] = pal->dat[BYTES_PER_COL*seq+2];
   }
+  return i+j;
+}*/
+
+int out_to_img(struct gif_img* im, int i, size_t code, unsigned char K) {
+  int n = get_code_len(im->dict, code);
+  int x = i % im->w;int y = i / im->w;
+  int x0 = x;
+  for (int j = 0; j < n; j++) {
+    unsigned char seq = get_pattern(im->dict, code, j);
+    if (j >= (im->w) - x0) {
+      x = 0;
+      x0 = 0;
+      y += 1;
+    }
+    img_paint(im, x, y, im->pal->dat[BYTES_PER_COL*seq],
+			im->pal->dat[BYTES_PER_COL*seq + 1],
+			im->pal->dat[BYTES_PER_COL*seq + 2]);
+    x++;
+  }
 /*  if (ap) {
     img[bpc*(i+j)] = pal->dat[BYTES_PER_COL*K];
     img[bpc*(i+j)+1] = pal->dat[BYTES_PER_COL*K+1];
     img[bpc*(i+j)+2] = pal->dat[BYTES_PER_COL*K+2];
   }*/
-  return i+j;
+  return i+n;
 }
 
 //this is a helper function that adds a new dictionary entry {CODE}+K to the table
-int save_to_dict(struct dictionary* dict, size_t index, size_t code, unsigned char K, int n) {
-  n = get_code_len(dict, code);
+int save_to_dict(struct dictionary* dict, size_t index, size_t code, unsigned char K/*, int n*/) {
+  int n = get_code_len(dict, code);
   unsigned char* seq = malloc(n+1);
   int j = 0;
   for (; j < n; j++) {
@@ -548,24 +608,36 @@ unsigned char* imgload_decode_gif(const char* fname, unsigned int* w, unsigned i
   //read the width and height and create the return image
   *w = buf[6] + ((size_t)(buf[7]) << 8);
   *h = buf[8] + ((size_t)(buf[9]) << 8);
-  unsigned char* ret = malloc(bpc * (*w)*(*h));
+  struct gif_img glob_im;
+  glob_im.w = *w;glob_im.h = *h;
+  glob_im.x_off = 0;glob_im.y_off = 0;
+  glob_im.bpc = bpc;
+  glob_im.dat = malloc(bpc * (*w)*(*h));
 
-  struct palatte* glob_pal = NULL;
+  //struct palatte* glob_pal = NULL;
+  glob_im.pal = NULL;
   unsigned char back_col = buf[11];
 
   //if the file specifies a global color table is present
   if (buf[10] & 0x80) {
-    glob_pal = read_palatte(re, buf[10] & 0x07);
-    print_palatte(glob_pal);
+    glob_im.pal = read_palatte(re, buf[10] & 0x07);
+    print_palatte(glob_im.pal);
   }
   fread(buf, 1, 1, re);
-  for (int i = 0; i < (*w)*(*h); i++) {
-    ret[i*bpc] = glob_pal->dat[BYTES_PER_COL*back_col];
-    ret[i*bpc + 1] = glob_pal->dat[BYTES_PER_COL*back_col + 1];
-    ret[i*bpc + 2] = glob_pal->dat[BYTES_PER_COL*back_col + 2];
+  for (int x = 0; x < glob_im.w; x++) {
+    for (int y = 0; y < glob_im.h; y++) {
+      img_paint(&glob_im, x, y,
+	  glob_im.pal->dat[BYTES_PER_COL*back_col], 
+	  glob_im.pal->dat[BYTES_PER_COL*back_col + 1],
+	  glob_im.pal->dat[BYTES_PER_COL*back_col + 2]);
+
+/*    ret[i*bpc] = glob_im.pal->dat[BYTES_PER_COL*back_col];
+    ret[i*bpc + 1] = glob_im.pal->dat[BYTES_PER_COL*back_col + 1];
+    ret[i*bpc + 2] = glob_im.pal->dat[BYTES_PER_COL*back_col + 2];
     //if there is an alpha chanel
-    if (bpc > 3)
-      ret[i*bpc + 3] = 255;
+      if (glob_im.bpc > 3)
+	glob_im.dat[i*bpc + 3] = 255;*/
+    }
   }
 
   //if the next block specifies a graphics control extension
@@ -579,32 +651,42 @@ unsigned char* imgload_decode_gif(const char* fname, unsigned int* w, unsigned i
 
   //if we are at the start of an image block
   while (buf[0] == 0x2c) {
+    struct gif_img im_l;
     fread(buf, 1, 9, re);
-    int lx = buf[0] + ((size_t)(buf[1]) << 8);
+    im_l.x_off = buf[0] + ((size_t)(buf[1]) << 8);
+    im_l.y_off = buf[2] + ((size_t)(buf[3]) << 8);
+    im_l.w = buf[4] + ((size_t)(buf[5]) << 8);
+    im_l.h = buf[6] + ((size_t)(buf[7]) << 8);
+    im_l.pal = glob_im.pal;
+    im_l.bpc = glob_im.bpc;
+    im_l.dat = glob_im.dat;
+/*    int lx = buf[0] + ((size_t)(buf[1]) << 8);
     int ly = buf[2] + ((size_t)(buf[3]) << 8);
     int lw = buf[4] + ((size_t)(buf[5]) << 8);
     int lh = buf[6] + ((size_t)(buf[7]) << 8);
-    struct palatte* pal = glob_pal;
+    struct palatte* pal = glob_im.pal;*/
     //if the local color table flag is set
     if (buf[8] & 0x80) {
-      pal = read_palatte(re, buf[8] & 0x07);
+      im_l.pal = read_palatte(re, buf[8] & 0x07);
     }
 
-    struct dictionary* dict = create_dictionary(pal);
+    //struct dictionary* dict = create_dictionary(pal);
+    im_l.dict = create_dictionary(im_l.pal);
 
     fread(buf, 1, 2, re);
     //actually begin reading the image
     unsigned char min_code_size = buf[0] + 1;
     //set clear and end to be 1 and 2 codes after the last color respectively
     unsigned int def_clear, def_end;
-    def_clear = (0x01 << pal->n);def_end = (0x01 << pal->n)+1;
+    def_clear = (0x01 << im_l.pal->n);def_end = (0x01 << im_l.pal->n)+1;
 
     unsigned char cur_code_size = min_code_size;
-    int ents = dict->imp_ents - 2;//we ignore the first 2 codes
+    int ents = im_l.dict->imp_ents - 2;//we ignore the first 2 codes
     //read the number of data bytes following
     int n_bytes = buf[1];
     size_t offset = 0;
-    int i = lw*ly+lx;int j = 0;
+//    int i = lw*ly+lx;int j = 0;
+    int i = 0;int j = 0;
 
     size_t code, prev_code;
     code = 0;
@@ -646,25 +728,27 @@ unsigned char* imgload_decode_gif(const char* fname, unsigned int* w, unsigned i
     //read the data out from the file and place each entry into an array
     while (offset < n_bytes*8) {
       if (ents == 0x01 << cur_code_size) {
+	  dat_stream[j-1] = read_stream(f_stream, offset-cur_code_size, cur_code_size+1);
 	  cur_code_size++;
 	  offset++;
 #ifdef DEBUG_READ
-	  printf("increased code size: now %d bits\n", cur_code_size);
+	  printf("increased code size: now %d bits (corrected the last entry to %lu)\n", cur_code_size, dat_stream[j-1]);
 #endif
       }
       code = read_stream(f_stream, offset, cur_code_size);
       dat_stream[j] = code;
+      offset += cur_code_size;
+      ents++;
+      j++;
 #ifdef DEBUG_READ
       printf("%lu, ", code);
 #endif
-      offset += cur_code_size;
-      ents++;
       //if we received a clear signal then reinitialize
       if (code == def_clear) {
+	printf("received clear instruction\n");
 	cur_code_size = min_code_size;
-	ents = dict->imp_ents - 2;
+	ents = im_l.dict->imp_ents - 2;
       }
-      j++;
     }
     free(f_stream);//we only need the dat_stream now
 
@@ -674,43 +758,49 @@ unsigned char* imgload_decode_gif(const char* fname, unsigned int* w, unsigned i
     //the initial step differs from later ones
     code = dat_stream[j];
     printf("Successfully decoded image data.\n");
-    print_dict_debug(dict, code);
+    print_dict_debug(im_l.dict, code);
     //we don't care about an initial clear statement
     if (code == def_clear) {
       j++;
       code = dat_stream[j];
-    print_dict_debug(dict, code);
+    print_dict_debug(im_l.dict, code);
     }
-    i = out_to_img(ret, bpc, i, 1, pal, dict, code, 0);
+//    i = out_to_img(ret, bpc, i, 1, pal, dict, code, 0);
+    i = out_to_img(&im_l, i, code, 0);
     j++;
     //end of initial step
-    while (j < dat_stream_entries && i < lw*lh) {
+    while (j < dat_stream_entries && i < im_l.w*im_l.h) {
       prev_code = code;
       code = dat_stream[j];
       printf("i = %d, j = %d, ", i, j);
-      print_dict_debug(dict, code);
+      print_dict_debug(im_l.dict, code);
 
       if (code == def_clear) {
-	printf("Recieved clear dictionary signal.\n");
-	delete_dictionary(dict);
-	dict = create_dictionary(pal);
+	printf("Received clear dictionary signal.\n");
+	delete_dictionary(im_l.dict);
+	im_l.dict = create_dictionary(im_l.pal);
+	//we need to treat it as if we are starting from scratch
+	j++;
+	code = dat_stream[j];
+	i = out_to_img(&im_l, i, code, 0);
       } else if (code == def_end) {
 	n_bytes = 0;//make sure we don't do any more looping 
 	printf("Reached the end of the current image block.\n");
 	break;
       //if we already have the code in our table
-      } else if (code < dict->entries) {
-	int n = get_code_len(dict, code);
-	unsigned char K = get_pattern(dict, code, 0);
-	save_to_dict(dict, 0, prev_code, K, n);
-	i = out_to_img(ret, bpc, i, n, pal, dict, code, K);
+      } else if (code < im_l.dict->entries) {
+//	int n = get_code_len(im_l.dict, code);
+	unsigned char K = get_pattern(im_l.dict, code, 0);
+	save_to_dict(im_l.dict, 0, prev_code, K);
+//	i = out_to_img(ret, bpc, i, n, pal, im_l.dict, code, K);
+	i = out_to_img(&im_l, i, code, K);
       //if we don't have the code in our table
       } else {
-	int n = get_code_len(dict, prev_code);
-	unsigned char K = get_pattern(dict, prev_code, 0);
-	save_to_dict(dict, code, prev_code, K, get_code_len(dict, prev_code));
+//	int n = get_code_len(im_l.dict, prev_code);
+	unsigned char K = get_pattern(im_l.dict, prev_code, 0);
+	save_to_dict(im_l.dict, code, prev_code, K);
 	//i = out_to_img(ret, bpc, i, n, pal, dict, prev_code, K, 1);
-	i = out_to_img(ret, bpc, i, n+1, pal, dict, code, K);
+	i = out_to_img(&im_l, i, code, K);
       }
 
       /*if (res > (0x01 << cur_code_size) || res == DICT_MSG_GREW){
@@ -720,14 +810,14 @@ unsigned char* imgload_decode_gif(const char* fname, unsigned int* w, unsigned i
       j++;
     }
     free(dat_stream);
-    delete_dictionary(dict);
-    if (pal != glob_pal) {
-      delete_palatte(pal);
+    delete_dictionary(im_l.dict);
+    if (im_l.pal != glob_im.pal) {
+      delete_palatte(im_l.pal);
     }
   }
 
-  delete_palatte(glob_pal);
-  return ret;
+  delete_palatte(glob_im.pal);
+  return glob_im.dat;
 }
 
 #endif //IMGLOAD_H
